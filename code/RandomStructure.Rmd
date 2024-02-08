@@ -1,0 +1,222 @@
+---
+title: "Random Networks"
+author: "Mikael Ohlsson"
+date: "2024-01-30"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+theme_set(theme_bw())
+theme_update(panel.grid = element_blank(),
+             strip.background = element_rect(fill = "white", colour = "black"))
+```
+
+## Generate random networks
+
+Using two network sizes, 100 and 200 nodes, and a connectance of 0.086. Currently, networks are pre-generated in $data/random/$ and this code will not run. To re-run (generating new random networks), change $projfolder$ (or delete the $data/random/$ folder) and run again.  
+
+```{r vars}
+projfolder <- "random"
+
+#If needed, create necessary path
+if(!projfolder %in% list.dirs("../data", full.names = F)) dir.create(paste0("../data/", projfolder))
+
+#Unless already generated, start making food webs
+if(length(list.files(paste0("../data/", projfolder))) < 1) {
+  for(n in c(100,200)){ # Network sizes n
+    for(i in 1:5){ # Number of random matrices per size
+      matrix(sample(c(rep(0, round((1-0.086)*(n*n))), # Decides connectance
+                      rep(1, round(0.086*(n*n)))),
+                    (n*n), replace = F), nrow = n, ncol = n) %>%
+        write.table(file = paste0("../data/", projfolder, "/N", n, "_c0086_i", i,".txt"),
+                    row.names = F, col.names = F)
+    }
+  }
+}
+
+```
+
+## Run the group model
+
+Currently the data is already provided in $results/random/$ and the group model will not be executed. If you want to run it, change $projfolder$ above (or delete the $results/random/$ folder) and run the code again.
+
+NOTE: The group model first needs to be compiled using the $make$ command in the $../GroupModelAlorithm$ folder.
+
+It is set up to run multiple iterations in parallel (number of cores - 2). This will still take approximately 10 hours.
+
+```{r groupmodel}
+# Packages for parallelizing
+library(foreach)
+library(doParallel)
+
+# First, checking if result files already exist. If not, running the group model. Time consuming unless run in parallel.
+if(length(list.files(paste0("../results/", projfolder))) < 1){
+  setwd("../GroupModelAlgorithm")
+  adjfolder <- paste0("../data/", projfolder)
+  
+# Grab filenames and paths 
+  netlist <- list.files(path = adjfolder, pattern = "*.txt$", full.names = T)
+  netnames <- list.files(path = adjfolder, pattern = "*.txt$", full.names = F)
+  
+  timereq <- function(s){ # If parallelizing on a cluster as separate jobs, not currently used here
+    {
+      if(s == 100) t <- "00:30:00"
+      else t <- "02:00:00"
+    }
+    return(t)
+  }
+  
+  
+  stepreq <- function(s){ # MCMC steps depending on size of network
+    # This set up should take about 100 core hours (i.e. divide by number of cores to get an approximate real time)
+    {
+      if(s == 100) sr <- 200000
+      else sr <- 200000 # more steps for the larger networks
+    }
+    return(sr)
+  }
+  
+  netmeta <- as_tibble(netnames) %>% 
+    separate(value, into =c("size", "rest"), sep ="_c0086_i") %>%
+    separate(rest, into =c("iter", "rest"), sep =".txt") %>%
+    mutate(size = as.numeric(substr(size, 2,4)),
+           iter = as.numeric(iter)) %>% 
+    dplyr::select(-rest) %>%
+    mutate(time = unlist(map(size, timereq))) %>%
+    mutate(step = unlist(map(size, stepreq)))
+    
+  #Number of MCMC chains
+  chains <- 20
+  
+  #Number of runs per network (runs with identical solutions will overwrite each other)
+  runs <- 100
+  
+  #Max number of groups per network
+  groups <- 20 
+  
+  # Set up parallelizing
+  CCount <- detectCores()-2
+  myCluster <- makeCluster(CCount, type = "PSOCK")  
+  registerDoParallel(myCluster)
+  
+  for(i in 1:length(netlist)){
+    foreach(x=1:runs) %dopar% {
+      r <- as.character(floor(runif(1, min=100001, max=1000000))) #random seed
+      exec <- paste("./FindGroups", netmeta[i,1], netlist[i], r, netmeta[i,4], chains, groups, 0) # ./FindGroups NodeSize AdjMatPath RandomSeed MCMCSteps MCMCChains MaxGroups DegreeCorr
+    #AFTER groups, 0 flag to deactivate degree correction  OR
+    #1, 1, 1 flags to activate degree correction
+    system(exec) #> paste0(netnames[i], "_out.txt")
+    }
+  }
+  stopCluster(myCluster)
+  
+  setwd("../code")
+  
+  # Group model output data uses the same folder as source food webs. Hence, after finishing, moving group model result files to result folder:
+  if(!projfolder %in% list.dirs("../results", full.names = F)) dir.create(paste0("../results/", projfolder))
+  
+  movefiles <- list.files(paste0("../data/", projfolder), pattern = ".txt-G")
+  if(length(movefiles > 1)) {
+    targetlocation <- paste0("../results/", projfolder,"/", movefiles)
+    file.rename(from = paste0("../data/", projfolder,"/", movefiles), to = targetlocation)
+  }
+}
+```
+
+
+## Collect data from group model runs
+
+```{r gatherdata}
+
+LETTERS702 <- c(LETTERS, sapply(LETTERS, function(x) paste0(x, LETTERS))) # "Species names"
+
+fetchrand <- function(r){
+    scan(file = paste0("../results/",projfolder,"/",r)) + 1
+  }
+
+randomdf <- list.files(paste0("../results/",projfolder,"/"), pattern = "*.txt-G")  %>% 
+    as_tibble() %>% 
+    separate(col = value, into = c("N", "rest"),
+             sep = c("_c"), remove = F) %>%
+    mutate(N = as.numeric(substr(N, 2,4))) %>%
+    separate(col = rest, into = c("c", "rest"),
+             sep = c("_i")) %>%
+    separate(col = rest, into = c("iter", "marginal"),
+             sep = c(".txt-G-20-DC-0-alpha-NA-beta-NA-Marginal")) %>%
+    mutate(iter = as.numeric(iter),
+           marginal = as.numeric(marginal)) %>%
+    mutate(group = map(value, fetchrand)) %>%
+    unnest(group) %>%
+    group_by(N,iter,marginal) %>%
+    mutate(species = LETTERS702[1:n()]) %>% 
+    ungroup() %>% 
+    separate(value, sep = "-G-20", c("filename","junk")) %>% 
+    dplyr::select(-junk, -c, -filename)
+```
+
+## Calculate Jaccard similarity
+
+Comparison of the ML-based best fit group structure to all alternative group structures.
+
+```{r}
+
+#Checking which species are present in the best fitting groups
+checksp <- function(w, i, m, s){
+  randomdf %>%
+    filter(N == w & iter == i & species %in% unlist(s)) %>%
+    group_by(N, iter, marginal) %>%
+    count(group) %>%
+    filter(n == max(n)) %>% 
+    group_by(marginal) %>%
+    slice(1) %>% #Pick one iteration in case of multiple iterations with the same group structure
+    ungroup() %>%
+    left_join(dplyr::select(randomdf, N, iter, marginal, group, species) %>%
+                filter(N == N & iter == i), 
+              by = c("N", "iter", "marginal", "group")) %>%
+    group_by(N, iter, marginal, group, n) %>%
+    nest() %>%
+    rename(species = data) %>%
+    return()
+}
+
+t1 <- Sys.time()
+J_tmp <- randomdf %>% 
+  group_by(marginal, group, N, iter) %>%
+  nest() %>% #Nest species
+  ungroup() %>%
+  rename(sp = data) %>%
+  mutate(sp.best = pmap(list(N, iter, marginal, sp), checksp)) %>%
+  unnest(sp.best, names_sep = "_") %>%
+  rowwise() %>%
+  mutate(sp.union = list(union(unlist(sp), unlist(sp.best_species)))) %>%
+  mutate(J_group = sp.best_n / length(sp.union)) %>%
+  ungroup() %>%
+  rename(mx = marginal, my = sp.best_marginal,
+          Js = J_group)
+t2 <- Sys.time()
+t2-t1
+```
+
+## Plot Jaccard similarity of random networks (Fig. S3)
+
+```{r Js_random, fig.width=6, height=3}
+gg_random <- J_tmp %>% 
+  group_by(N, iter, mx, my) %>%
+  summarise(meanJs = mean(Js)) %>% 
+  ungroup() %>%
+  filter(mx != my) %>%
+  ggplot() +
+  aes(x = meanJs) +
+  geom_histogram(aes(y = after_stat(count / sum(count))), bins=30) +
+  facet_grid(N~iter) + 
+  labs(x = "Jaccard similarity", y = "Proportion") #+ 
+  # theme(axis.text = element_text(size = 12),
+  #       axis.title = element_text(size = 13))
+gg_random
+ggsave("../results/figs3.pdf", gg_random, width = 6, height = 3)
+```
+
