@@ -1,7 +1,7 @@
 # GSSL
 Group Structure Solution Landscapes
 
-Data and analyses used in the manuscript *Variability of group structure solution landscapes in food webs*.
+Data and analyses used in the manuscript *Variability and ecological relevance of alternative group structures in food webs*.
 
 Analyses of empirical networks are found in $code/SolutionLandscapes.Rmd$. Knit to obtain an HTML document with the output, with the figures included in the manuscript. $code/RandomStructure.Rmd$ contains additional code and output for generating and analyzing food webs with random structures.
 
