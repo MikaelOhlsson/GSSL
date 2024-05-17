@@ -1,7 +1,7 @@
 ---
 title: "Group model solution landscapes"
 author: "Mikael Ohlsson"
-date: "2023-11-21"
+date: "2024-05-17"
 output: html_document
 editor_options: 
   chunk_output_type: console
@@ -10,30 +10,29 @@ editor_options:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
-library(tidyverse)
 library(data.table)
 library(ggpmisc)
 {if(!require("ComplexHeatmap")) {
   library(devtools)
-  install_github("jokergoo/ComplexHeatmap")
-  require("ComplexHeatmap")}
+  install_github("jokergoo/ComplexHeatmap")}
   else require("ComplexHeatmap")}
 library(cowplot)
-#library(magrittr)
+library(magrittr)
 library(RColorBrewer)
 library(grid)
 library(scales)
 library(NetIndices)
-#library(FactoMineR)
+library(FactoMineR)
 #library(factoextra)
 library(igraph)
 library(network)
-#library(gt)
+library(gt)
 library(ggtext)
 library(ggalluvial)
 library(ggrepel)
-#library(lme4)
+library(tidyverse)
 library(xtable)
+
 
 theme_set(theme_bw())
 theme_update(panel.grid = element_blank(),
@@ -74,7 +73,7 @@ if(length(list.files(path = "../data/adjmat")) <500) {
                    delim = " ",
                    col_names = F)
       
-      #And separate files with species names associated to specific rows/columns
+     # And separate files with species names associated to specific rows/columns
       net.adj %>%
            rownames_to_column() %>%
            pull(var=1) %>%
@@ -91,7 +90,7 @@ if(length(list.files(path = "../data/adjmat")) <500) {
 
 # Group model runs
 
-Running the group model for all the generated adjacency matrices. As we manually created separate adjacency matrix iterations, we set number of "runs" here to 1.
+Running the group model for all the generated adjacency matrices. As we manually created separate adjacency matrix iterations, we set number of "runs" here to 1. Note that this is very time consuming (approx. 3000 hours) and should be parallelized.  
 
 ```{r groupmodel}
 #First, checking if result files already exist. If not, running the group model. Very time consuming unless run in parallel.
@@ -140,44 +139,27 @@ if(length(list.files("../results/original")) < 500){
 Function to generate data frame with results from group model
 
 ```{r CollectResults, message = FALSE, warning = FALSE}
-Collect_Results <- function() {
-  results <- list.files(path = paste0("../results/original"), pattern = "Marginal") #%>% 
-    #str_subset("_0\\.60_", negate = TRUE) %>% #Exclude 0.6 fraction
-    #as_tibble() %>% 
-    #separate(col = value, into = c("run", "marginal"), 
-    #         sep = "Marginal", remove = F) %>% 
-    #group_by(run) %>% 
-    #summarise(marginal = max(marginal)) %>% #If a single iteration has multiple runs, select the grouping with highest marginal likelihood
-    #ungroup() %>% 
-    #transmute(run = paste0(run, "Marginal", marginal)) %>%
-    #pull(run)
-    #list.files(path = paste0("../results/newgroups/",diri,"/."), pattern = "Marginal") %>% 
-    #str_subset("_0\\.60_", negate = TRUE)
-  
-  species <- list.files(path = paste0("../data/sp"), pattern = "*.txt$") 
+Collect_Results <- function(foldername) {
+  results <- list.files(path = paste0("../results/", foldername), pattern = "Marginal") #%>%  
+  species <- list.files(path = paste0("../data/sp"), pattern = "*.txt$") %>% 
+    as_tibble() %>%
+    filter(str_detect(value, str_c(substr(results, 0,10), collapse="|"))) %>%
+    pull(value)
+    
   
   df <- tibble(web = "a", 
-               #frac = 0.1, 
-               #cuttype = "a", 
                iter = 0.1,
                marginal = 0.1,
                species = "a",
                group = 0.1) %>% 
     .[-1,]
   
-    # list.files(path = paste0("../data/", resfolder), pattern = "*.txt-G") %>%
-    # as_tibble() %>%
-    # separate(value, c("SID", "def"), sep = ".txt", remove = F) %>%
-    # separate(def, c("rest", "Marginal"), sep = "Marginal-")
-  
   for(i in 1:length(results)) {
-    tmp_grp <- scan(file = paste0("../results/original/",results[i]))
+    tmp_grp <- scan(file = paste0("../results/",foldername,"/",results[i]))
     tmp_sp <- scan(file = paste0("../data/sp/",species[i]), sep = "\n", what = "character")
     tmp_df <- tibble(web = substr(results[i], 1, 5),
-                     #frac = as.numeric(substr(results[i], 7, 10)),
-                     #cuttype = paste0(substr(results[i], 12, 13), substr(results[i], 23, 23)),
-                     iter = as.numeric(substr(results[i], 7, 10)),
-                     marginal = as.numeric(substr(results[i], 51,75)),
+                     iter = as.numeric(substr(results[i], 7,10)), #7, 10
+                     marginal = as.numeric(substr(results[i], 51,75)), #51,75
                      species = tmp_sp,
                      group = tmp_grp + 1
                      ) %>% 
@@ -189,19 +171,20 @@ Collect_Results <- function() {
 }
 
 
-#Potentially to be used for plot titles etc
+#Used for plot titles etc
 
 webrename <- function(df) {
   df %>%
-  mutate(web = case_when(web == "baren" ~ "Barents Sea",
-            web == "kongs" ~ "Kongsfjorden",
-            web == "reefs" ~ "Reef",
-            web == "stmks" ~ "St. Marks",
-            web == "ythan" ~ "Ythan")) %>%
+  mutate(web = case_when(web == "baren" ~ "Barents Sea (S=233)",
+            web == "kongs" ~ "Kongsfjorden (S=268)",
+            web == "reefs" ~ "Reef (S=249)",
+            web == "stmks" ~ "St. Marks (S=143)",
+            web == "ythan" ~ "Ythan (S=92)")) %>%
+    mutate(web = fct_relevel(web, c("Ythan (S=92)","St. Marks (S=143)","Barents Sea (S=233)","Reef (S=249)","Kongsfjorden (S=268)"))) %>%
     return()
 }
 
-group_df <- Collect_Results()
+group_df <- Collect_Results("original")
 
 ```
 
@@ -335,14 +318,12 @@ group_df %>%
   left_join(group_df %>% 
               dplyr::select(web, iter, marginal) %>%
               group_by(web, marginal) %>%
-              slice(1), #if multiple webs have the same ML, just pick one
+              slice(1), #if multiple identical structures, just pick one
             by = c("web", "marginal")) %>%
   slice(1:10) %>% # select top 10 ML per web
   dplyr::select(-iter) %>%
-  #filter(web %in% c("baren","stmks","ythan")) %>%
   webrename() %>%
   xtable()
-
 ```
 
 # Compare all combinations of group structures
@@ -389,14 +370,13 @@ J_tmp <- compare_df %>% #filter(web == "stmks") %>%
 }
 
 AllJs_df <- AllJs() 
-
 ```
 
 # Solution landscapes (Fig. 2)
 
 Excluding St. Marks and Ythan due to very low variability. The Barents Sea food web is highly concentrated to two solutions and thus does not display a density plot.
 
-```{r}
+```{r soluland, message = FALSE, warning = FALSE}
 dist_plot <- function(w) {
   
   #For fancy plot titles
@@ -483,12 +463,12 @@ dist_plot <- function(w) {
     return()
 }
 
-dist_plot("baren") # Not enough spread for density plot
+#dist_plot("baren") # Not enough spread for density plot
 dist_plot("kongs")
 dist_plot("reefs")
 #dist_plot("stmks") # very limited variation
 #dist_plot("ythan") # no variation (mind, only jitter variation if still plotting)
-plot_grid(dist_plot("kongs"), dist_plot("reefs"), ncol = 2) %>%
+plot_grid(dist_plot("reefs"), dist_plot("kongs"), ncol = 2) %>%
 ggsave(filename = "../results/fig2.pdf", height = 4, width = 9.75)
 
 
@@ -664,24 +644,21 @@ cheat_reefs <- CheatPlot("reefs")
 cheat_stmks <- CheatPlot("stmks")
 #cheat_ythan <- CheatPlot("ythan") # Skipping Ythan as it only has one group structure solution
 
-cheat_grid <- plot_grid(grid.grabExpr(draw(cheat_baren)),
-          grid.grabExpr(draw(cheat_kongs)), grid.grabExpr(draw(cheat_reefs)),
-          grid.grabExpr(draw(cheat_stmks)), #grid.grabExpr(draw(cheat_ythan)),
+cheat_grid <- plot_grid(grid.grabExpr(draw(cheat_stmks)), grid.grabExpr(draw(cheat_baren)),
+          grid.grabExpr(draw(cheat_reefs)), grid.grabExpr(draw(cheat_kongs)), #grid.grabExpr(draw(cheat_ythan)),
           ncol = 2, 
           #labels = c("A", "B", "C", "D", "E"),
           hjust = -0.4)
 
 cheat_grid
 ggsave(filename = "../results/fig3.pdf", plot = cheat_grid, width = 9.5, height = 9)
-
-
 ```
 
 # Species data
 
 Species taxonomies for the Barents Sea were obtained from Kortsch et al. (2018), while taxonomies for all other networks were obtained from  Cirtwill & Eklöf (2018, and references therein).
 
-```{r}
+```{r spdata, message = FALSE, warning = FALSE}
 TraitsDF <- read_csv(file = "../data/food_webs_data/full_data_upd.csv") %>%
   mutate(Network = case_when(Network == "baren" ~ "Barent's Sea",
             Network == "baske" ~ "Serengeti",
@@ -715,10 +692,10 @@ StabDF_Traits <- StabDF_gr %>%
 
 Adding closest taxonomic relationship for all species pairs which were found in the same group.
 
-```{r Taxonomy_simi, fig.width=10, fig.height=5, out.width="100%"}
-gg_pw_close_taxa <- StabDF_Traits %>%
+```{r Taxonomy_simi, message = FALSE, warning = FALSE, fig.width=10, fig.height=5, out.width="100%"}
+pw_taxa_data <- StabDF_Traits %>%
   filter(Var1 != Var2) %>%
-  filter(group.x == group.y & web %in% c("baren", "kongs", "reefs")) %>%
+  filter(group.x == group.y & web %in% c("kongs", "reefs")) %>%
   mutate(TaxSim = ifelse(!is.na(Phylum.x) & !is.na(Phylum.y) & Phylum.x == Phylum.y, "Phylum", "Unrelated")) %>%
   mutate(TaxSim = ifelse(!is.na(Class.x) & !is.na(Class.y) & Class.x == Class.y, "Class", TaxSim)) %>%
   mutate(TaxSim = ifelse(!is.na(Order.x) & !is.na(Order.y) & Order.x == Order.y, "Order", TaxSim)) %>%
@@ -730,23 +707,154 @@ gg_pw_close_taxa <- StabDF_Traits %>%
   distinct(grp, .keep_all = TRUE) %>%
   ungroup() %>%
   dplyr::select(-grp) %>%
+  dplyr::select(web, Var1, Var2, value, TaxSim) %>%
   webrename() %>%
+  group_by(web, TaxSim) %>% 
+  summarise(ncount = n(),
+            meanTax = mean(value),
+            sdTax = sd(value)) %>%
+  ungroup() %>%
+  mutate(TaxData = paste(paste0("n=", ncount),
+                                paste0("m=", round(meanTax, digits = 3)),
+                                paste0("sd=", round(sdTax, digits = 3)),
+                                sep = " \n "))
+
+TaxaTable <- ggplot(pw_taxa_data) +
+  aes(x = TaxSim, y = 0, label = TaxData) +
+  geom_label(fill = NA, size = 3.3, label.padding = unit(0.07, "lines")) +
+  facet_grid(.~web) +
+  theme(panel.grid = element_blank(),
+        panel.border = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.y = element_blank()
+        ) +
+  labs(x = "Species pairs' closest taxonomic relatedness")
+
+gg_pw_close_taxa <- StabDF_Traits %>%
+  filter(Var1 != Var2 & group.x == group.y & 
+          web %in% c("kongs", "reefs")) %>% 
+  mutate(TaxSim = ifelse(!is.na(Phylum.x) & !is.na(Phylum.y) & Phylum.x == Phylum.y, "Phylum", "Unrelated")) %>%
+  mutate(TaxSim = ifelse(!is.na(Class.x) & !is.na(Class.y) & Class.x == Class.y, "Class", TaxSim)) %>%
+  mutate(TaxSim = ifelse(!is.na(Order.x) & !is.na(Order.y) & Order.x == Order.y, "Order", TaxSim)) %>%
+  mutate(TaxSim = ifelse(!is.na(Family.x) & !is.na(Family.y) & Family.x == Family.y, "Family", TaxSim)) %>%
+  mutate(TaxSim = ifelse(!is.na(Genus.x) & !is.na(Genus.y) & Genus.x == Genus.y, "Genus", TaxSim)) %>%
+  group_by(grp = paste(pmax(Var1, Var2), pmin(Var1, Var2), sep = "_")) %>%
+  distinct(grp, .keep_all = TRUE) %>%
+  ungroup() %>%
+  mutate(TaxSim = as.factor(TaxSim),
+         TaxSim = fct_relevel(TaxSim, c("Unrelated", "Phylum", "Class", 
+                                        "Order", "Family", "Genus"))) %>%
+  dplyr::select(Var1, Var2, web, TaxSim, value) %>%
+  webrename() %>%
+  left_join(pw_taxa_data, by = c("web", "TaxSim")) %>%
   ggplot() +
   aes(x = TaxSim, y = value, fill = TaxSim, group = TaxSim) + 
-  geom_boxplot(position = position_dodge2(preserve = "single")) +
+  geom_boxplot(position = position_dodge2(preserve = "single"), show.legend = F) +
   facet_grid(.~web, scales = "free_x", space = "free") +
-  scale_y_continuous(expand = c(0,0.03), limits = c(0,1)) +
+  scale_y_continuous(expand = expansion(add = c(0.05,0.05)), limits = c(0,1), breaks = c(0,0.25,0.5,0.75,1)) +
   scale_fill_manual(values = c("#555555",rev(brewer.pal(5, "RdYlBu")))) +
-  labs(x = "Species pairs' closest taxonomic relationship", y = "Pairwise stability") +
-  theme(axis.text.x = element_text(angle = -30, hjust=0))
-gg_pw_close_taxa
-ggsave(filename = "../results/fig4.pdf", plot = gg_pw_close_taxa, width = 7, height = 3)
+  labs(x = "Species pairs' closest taxonomic relatedness", y = "Pairwise stability") +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank())
+plot_grid(gg_pw_close_taxa, NULL, plot_grid(NULL,TaxaTable, ncol = 2, rel_widths = c(0.055,0.945)), ncol = 1, rel_heights = c(0.7,-0.025,0.26))
+  
+plot_grid(gg_pw_close_taxa, NULL, plot_grid(NULL,TaxaTable, ncol = 2, rel_widths = c(0.055,0.945)), ncol = 1, rel_heights = c(0.7,-0.025,0.26)) %>%
+ggsave(filename = "../results/fig4.pdf", width = 8, height = 3.8)
 ```
 
-# Jaccard similarity vs Marginal likelihood (Fig. S1)
+# Trophic level (Fig. S1)
+
+Obtaining the trophic level (using the NetIndices package v. 1.4.4.1) of each species in the respective food webs and visualizing with histograms. 
+
+```{r TL, message = FALSE, warning = FALSE, fig.width=8, fig.height=2, out.width="100%"}
+MakeTL_Sp_list <- function(){
+    TL_sp <- tibble() #directories to measure TL in (only unmodified networks used)
+   
+    # Load one each of each food web adjacency matrix
+    networks <- list.files(path = "../data/adjmat/", 
+                           pattern = "*.txt$") %>% 
+      str_subset(c("_0001"), negate = FALSE)
+    
+    # Species vectors for matrix dims
+    species <- list.files(path = "../data/sp/", 
+                          pattern = "*.txt$") %>% 
+      str_subset(c("_0001"), negate = FALSE) 
+    
+    # Combine adj matrices and species vectors
+    for(i in 1:length(networks)){
+                tmp_ints <- read.delim(file = paste0("../data/adjmat/",networks[i]), 
+                             header = F, sep = " ") %>% as.matrix()
+  
+                tmp_sp <- scan(file = paste0("../data/sp/",species[i]), 
+                     sep = "\n", what = "character") %>%
+                  str_replace_all("\\.", "_") %>%
+                  str_replace_all(" ", "_")
+      
+      dimnames(tmp_ints) <- list(tmp_sp, tmp_sp)
+      tmp_mat <- matrix(data = 0, nrow = nrow(tmp_ints), ncol = ncol(tmp_ints))
+      dimnames(tmp_mat) <- list(tmp_sp, tmp_sp)
+    
+      # Obtain TL using TrophInd
+      TL_tmp <- TrophInd(Tij = tmp_ints) %>% 
+        dplyr::select(TL) %>% 
+        rownames_to_column() %>%
+        as_tibble() %>%
+        rename(species = 1) %>%
+        mutate(web = substr(networks[i], 0, 5)) %>%
+        mutate(species = str_replace(species, pattern="___", replacement="_"))
+      
+      
+      
+      
+      TL_sp <- TL_sp %>% bind_rows(TL_tmp)
+    }
+  return(TL_sp)
+}
+
+TL_sp <- MakeTL_Sp_list()
+
+gg_TL_dist <- TL_sp %>%
+  webrename() %>%
+  ggplot() +
+  aes(x = TL) +
+  geom_histogram() +
+  facet_wrap(web~., ncol = 5) +
+  labs(x = "Trophic level", y = "Number of species")
+gg_TL_dist
+ggsave(plot = gg_TL_dist, filename = "../results/figs_tl.pdf", height = 2, width = 8)
+```
+
+# Taxa Distribution (Fig. S2)
+
+Counting the number of species per class in each food web. Filtered to include only those with more than two species per class in at least one of the food webs for easier visualization. 
+
+```{r TaxaDist, fig.width=6.5, fig.height=9, out.width="67%"}
+gg_Taxa_dist <- TraitsDF %>% 
+  filter(!is.na(Network)) %>% 
+  group_by(Network) %>% 
+  count(Class) %>% 
+  ungroup() %>% 
+  filter(n > 2) %>% 
+  rename(web = Network) %>% 
+  webrename() %>% 
+  ggplot() + 
+  aes(x = Class, y = n) + 
+  geom_bar(stat = "identity", show.legend = F) + 
+  facet_wrap(web~., scales = "free_y", ncol=1) + 
+  theme(axis.text.x = element_text(angle = -55, hjust = 0)) +
+  labs(y = "Number of species")
+gg_Taxa_dist
+ggsave(plot = gg_Taxa_dist, filename = "../results/figs_taxa.pdf", height = 9, width = 6.5)
+```
+
+# Jaccard similarity vs Marginal likelihood (Fig. S4)
 
 ```{r}
-Js_ML <- group_df %>% 
+gg_Js_ML <- group_df %>% 
   filter(!web %in% c("ythan")) %>% 
   dplyr::select(web, iter, marginal, group) %>%
   distinct() %>%
@@ -755,33 +863,26 @@ Js_ML <- group_df %>%
     by = c("web", "iter", "group" = "group.x")) %>% 
   group_by(web, iter) %>%
   summarise(marginal = mean(marginal), Js = mean(GroupJs, na.rm = T)) %>% 
-  ungroup() %>%
+  ungroup(iter) %>%
+  mutate(marginal = marginal - max(marginal)) %>%
   distinct(web, marginal, Js) %>%
-  webrename() 
-
-ML_borders <- Js_ML %>% group_by(web) %>% mutate(ML_3 = max(marginal) - 3,
-                                   ML = max(marginal),
-                                   ML_min = min(marginal),
-                                   JS_min = min(Js)) %>%
-  ungroup() %>% 
-  distinct(web, ML_3, ML, ML_min, JS_min)
-
- 
-gg_Js_ML <- ggplot() + 
-  geom_point(data = Js_ML, aes(x = marginal, y = Js)) + 
-  facet_wrap(web~., scales = "free") +
-  labs(x = "Marginal likelihood", y = "Jaccard similarity (vs. best solution)")
+  webrename() %>%
+  ggplot() + 
+  aes(x = marginal, y = Js) +
+  geom_point() + 
+  facet_wrap(web~.) +
+  labs(x = expression(paste(Delta, "Marginal likelihood")), 
+       y = "Jaccard similarity (vs. best solution)")
 gg_Js_ML
-ggsave(filename = "../results/figs1.pdf", plot = gg_Js_ML, width = 6.5, height = 6)
+ggsave(filename = "../results/figs_ml.pdf", plot = gg_Js_ML, width = 6.5, height = 6)
 
 ```
 
-# Alluvial plot (Fig. S2)
+# Alluvial plot (Fig. S5)
 
 An example plot visualizing the structural differences between two group structure iterations in Kongsfjorden.
 
 ```{r alluvials}
-
 AlluPlotter <- function(u,v, net) {
 AlluDF <- J_df %>%
   IterJs() %>%
@@ -829,5 +930,5 @@ AlluDF <- J_df %>%
 }
 gg_KongsAllu <- AlluPlotter(63,47,"kongs") #Js 0.856
 gg_KongsAllu
-ggsave(filename = "../results/figs2.pdf", height = 7, width = 5)
+ggsave(filename = "../results/figs_allu.pdf", height = 7, width = 5)
 ```

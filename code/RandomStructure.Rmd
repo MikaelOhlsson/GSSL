@@ -17,7 +17,7 @@ theme_update(panel.grid = element_blank(),
 
 ## Generate random networks
 
-Using two network sizes, 100 and 200 nodes, and a connectance of 0.086. Currently, networks are pre-generated in $data/random/$ and this code will not run. To re-run (generating new random networks), change $projfolder$ (or delete the $data/random/$ folder) and run again.  
+Using network size and connectance of each respective food web in the study. Currently, networks are pre-generated in $data/random/$ and this part of the code will not run. To re-run (generating new random networks), change $projfolder$ (or delete the $data/random/$ folder) and run again.  
 
 ```{r vars}
 projfolder <- "random"
@@ -145,9 +145,12 @@ randomdf <- list.files(paste0("../results/",projfolder,"/"), pattern = "*.txt-G"
     mutate(N = as.numeric(substr(N, 2,4))) %>%
     separate(col = rest, into = c("c", "rest"),
              sep = c("_i")) %>%
-    separate(col = rest, into = c("iter", "marginal"),
+    separate(col = rest, into = c("iter", "rest"),
+             sep = c("_r")) %>%
+    separate(col = rest, into = c("run", "marginal"),
              sep = c(".txt-G-20-DC-0-alpha-NA-beta-NA-Marginal")) %>%
     mutate(iter = as.numeric(iter),
+           run = as.numeric(run),
            marginal = as.numeric(marginal)) %>%
     mutate(group = map(value, fetchrand)) %>%
     unnest(group) %>%
@@ -158,65 +161,106 @@ randomdf <- list.files(paste0("../results/",projfolder,"/"), pattern = "*.txt-G"
     dplyr::select(-junk, -c, -filename)
 ```
 
-## Calculate Jaccard similarity
+# Functions for Jaccard Distance
 
-Comparison of the ML-based best fit group structure to all alternative group structures.
+## Compare best group structure solution to alternatives
 
-```{r}
+```{r JaccardDistance, message = FALSE, warning = FALSE}
+Jaccard_Distance <- function(df){ 
+  GroupAll <- tibble()
+  df <- randomdf %>%
+    mutate(Ni = paste0(N, "_", iter))
+  webs <- df %>%
+    distinct(Ni) %>%
+    pull()
+  
+  for(w in 1:length(webs)){
+    base_df <- df %>% # Base is the "best" grouping as in highest marginal likelihood
+      filter(Ni == webs[w]) %>%
+      filter(marginal == max(marginal)) %>% 
+      group_by(species) %>% 
+      slice(1) %>% # If multiple iterations give the same grouping, picking the first one
+      ungroup() %>% 
+      dplyr::select(species, group) # Best (marginal likelihood) original web group structure to which the reduced networks are compared
+ 
+      time1 <- Sys.time()
+      compare_df <- filter(df, Ni == webs[w])
+      
+      #left_join base_df (X) and compare_df (Y)
+      tmp_df <- compare_df %>% 
+      dplyr::select(run, species, group) %>%
+      left_join(base_df, ., by=c("species")) #%>%
 
-#Checking which species are present in the best fitting groups
-checksp <- function(w, i, m, s){
-  randomdf %>%
-    filter(N == w & iter == i & species %in% unlist(s)) %>%
-    group_by(N, iter, marginal) %>%
-    count(group) %>%
-    filter(n == max(n)) %>% 
-    group_by(marginal) %>%
-    slice(1) %>% #Pick one iteration in case of multiple iterations with the same group structure
-    ungroup() %>%
-    left_join(dplyr::select(randomdf, N, iter, marginal, group, species) %>%
-                filter(N == N & iter == i), 
-              by = c("N", "iter", "marginal", "group")) %>%
-    group_by(N, iter, marginal, group, n) %>%
-    nest() %>%
-    rename(species = data) %>%
-    return()
+        # Current group to compare from X
+        fetchsp.x <- function(g1) {
+          base_df %>% 
+            filter(group == g1) %>%
+            pull(species) %>%
+            return()
+        }
+        
+        # Current group to compare from Y
+        fetchsp.y <- function(i,g2) {
+          tmp_df %>% 
+            filter(run == i & group.y == g2) %>%
+            pull(species) %>%
+            return()
+        }
+        
+            GroupJ <- tmp_df %>% 
+              group_by(run, group.x) %>% 
+              count(group.y) %>% 
+              filter(n == max(n)) %>% 
+              slice(1) %>%
+              ungroup() %>%  
+              mutate(sp.x = pmap(.l = list(group.x), fetchsp.x)) %>%
+              mutate(sp.y = pmap(.l = list(run, group.y), fetchsp.y)) %>%
+              rowwise() %>%
+              mutate(sp.intersect = list(intersect(unlist(sp.x), unlist(sp.y)))) %>%
+              mutate(sp.union = list(union(unlist(sp.x), unlist(sp.y)))) %>% 
+              mutate(GroupJs = length(unlist(sp.intersect)) / length(unlist(sp.union))) %>%
+              ungroup() %>%
+              mutate(Ni = webs[w])
+            
+            GroupAll <- bind_rows(GroupAll, GroupJ)
+  
+            time2 <- Sys.time()
+            dtime <- as.numeric((time2-time1), units = "mins")
+            
+            message(sprintf("web %s taking %g minutes", webs[w], dtime))
+  }
+            return(GroupAll) 
 }
 
-t1 <- Sys.time()
-J_tmp <- randomdf %>% 
-  group_by(marginal, group, N, iter) %>%
-  nest() %>% #Nest species
-  ungroup() %>%
-  rename(sp = data) %>%
-  mutate(sp.best = pmap(list(N, iter, marginal, sp), checksp)) %>%
-  unnest(sp.best, names_sep = "_") %>%
-  rowwise() %>%
-  mutate(sp.union = list(union(unlist(sp), unlist(sp.best_species)))) %>%
-  mutate(J_group = sp.best_n / length(sp.union)) %>%
-  ungroup() %>%
-  rename(mx = marginal, my = sp.best_marginal,
-          Js = J_group)
-t2 <- Sys.time()
-t2-t1
+J_rand_df <- Jaccard_Distance(randomdf) %>%
+  group_by(Ni, run) %>%
+  summarise(Js = mean(GroupJs))
+
 ```
 
-## Plot Jaccard similarity of random networks (Fig. S3)
+## Random structure similarity (Fig. S3)
 
-```{r Js_random, fig.width=6, height=3}
-gg_random <- J_tmp %>% 
-  group_by(N, iter, mx, my) %>%
-  summarise(meanJs = mean(Js)) %>% 
-  ungroup() %>%
-  filter(mx != my) %>%
+```{r}
+gg_random_best <- J_rand_df %>%
+  separate(Ni, c("N", "iter"), sep = "_") %>%
+  mutate(N = case_when(N == "92" ~ "S=92 C=0.049",
+          N == "143" ~ "S=143 C=0.086",
+          N == "233" ~ "S=233 C=0.042",
+          N == "249" ~ "S=249 C=0.053",
+          N == "268" ~ "S=268 C=0.023")) %>%
+  mutate(N = as.factor(N)) %>%
+  mutate(N = fct_relevel(N, c("S=92 C=0.049",
+                              "S=143 C=0.086",
+                              "S=233 C=0.042",
+                              "S=249 C=0.053",
+                              "S=268 C=0.023"))) %>%
   ggplot() +
-  aes(x = meanJs) +
+  aes(x = Js) +
   geom_histogram(aes(y = after_stat(count / sum(count))), bins=30) +
-  facet_grid(N~iter) + 
-  labs(x = "Jaccard similarity", y = "Proportion") #+ 
-  # theme(axis.text = element_text(size = 12),
-  #       axis.title = element_text(size = 13))
-gg_random
-ggsave("../results/figs3.pdf", gg_random, width = 6, height = 3)
+  scale_x_continuous(limits = c(0,1), labels = c("0","0.25","0.5","0.75","1")) +
+  facet_grid(N~iter, scales="free_y") + 
+  labs(x = "Jaccard similarity", y = "Proportion")
+gg_random_best
+ggsave("../results/figs_random.pdf", gg_random_best, width = 10, height = 7)
 ```
 
